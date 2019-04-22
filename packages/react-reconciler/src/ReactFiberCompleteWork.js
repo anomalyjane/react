@@ -17,6 +17,7 @@ import type {
   Container,
   ChildSet,
 } from './ReactFiberHostConfig';
+import type {ReactEventComponentInstance} from 'shared/ReactTypes';
 import type {SuspenseState} from './ReactFiberSuspenseComponent';
 
 import {
@@ -34,17 +35,28 @@ import {
   Mode,
   Profiler,
   SuspenseComponent,
-  PureComponent,
-  SimplePureComponent,
+  DehydratedSuspenseComponent,
+  MemoComponent,
+  SimpleMemoComponent,
   LazyComponent,
+  IncompleteClassComponent,
+  EventComponent,
+  EventTarget,
 } from 'shared/ReactWorkTags';
-import {Placement, Ref, Update} from 'shared/ReactSideEffectTags';
+import {ConcurrentMode, NoContext} from './ReactTypeOfMode';
+import {
+  Placement,
+  Ref,
+  Update,
+  NoEffect,
+  DidCapture,
+  Deletion,
+} from 'shared/ReactSideEffectTags';
 import invariant from 'shared/invariant';
 
 import {
   createInstance,
   createTextInstance,
-  createHiddenTextInstance,
   appendInitialChild,
   finalizeInitialChildren,
   prepareUpdate,
@@ -52,10 +64,13 @@ import {
   supportsPersistence,
   cloneInstance,
   cloneHiddenInstance,
-  cloneUnhiddenInstance,
+  cloneHiddenTextInstance,
   createContainerChildSet,
   appendChildToContainerChildSet,
   finalizeContainerChildren,
+  mountEventComponent,
+  updateEventComponent,
+  handleEventTarget,
 } from './ReactFiberHostConfig';
 import {
   getRootHostContainer,
@@ -72,8 +87,14 @@ import {popProvider} from './ReactFiberNewContext';
 import {
   prepareToHydrateHostInstance,
   prepareToHydrateHostTextInstance,
+  skipPastDehydratedSuspenseInstance,
   popHydrationState,
 } from './ReactFiberHydrationContext';
+import {
+  enableSuspenseServerRenderer,
+  enableEventAPI,
+} from 'shared/ReactFeatureFlags';
+import {markRenderEventTime, renderDidSuspend} from './ReactFiberScheduler';
 
 function markUpdate(workInProgress: Fiber) {
   // Tag the fiber with an update effect. This turns a Placement into
@@ -198,43 +219,19 @@ if (supportsMutation) {
       // eslint-disable-next-line no-labels
       branches: if (node.tag === HostComponent) {
         let instance = node.stateNode;
-        if (needsVisibilityToggle) {
+        if (needsVisibilityToggle && isHidden) {
+          // This child is inside a timed out tree. Hide it.
           const props = node.memoizedProps;
           const type = node.type;
-          if (isHidden) {
-            // This child is inside a timed out tree. Hide it.
-            instance = cloneHiddenInstance(instance, type, props, node);
-          } else {
-            // This child was previously inside a timed out tree. If it was not
-            // updated during this render, it may need to be unhidden. Clone
-            // again to be sure.
-            instance = cloneUnhiddenInstance(instance, type, props, node);
-          }
-          node.stateNode = instance;
+          instance = cloneHiddenInstance(instance, type, props, node);
         }
         appendInitialChild(parent, instance);
       } else if (node.tag === HostText) {
         let instance = node.stateNode;
-        if (needsVisibilityToggle) {
+        if (needsVisibilityToggle && isHidden) {
+          // This child is inside a timed out tree. Hide it.
           const text = node.memoizedProps;
-          const rootContainerInstance = getRootHostContainer();
-          const currentHostContext = getHostContext();
-          if (isHidden) {
-            instance = createHiddenTextInstance(
-              text,
-              rootContainerInstance,
-              currentHostContext,
-              workInProgress,
-            );
-          } else {
-            instance = createTextInstance(
-              text,
-              rootContainerInstance,
-              currentHostContext,
-              workInProgress,
-            );
-          }
-          node.stateNode = instance;
+          instance = cloneHiddenTextInstance(instance, text, node);
         }
         appendInitialChild(parent, instance);
       } else if (node.tag === HostPortal) {
@@ -242,22 +239,28 @@ if (supportsMutation) {
         // down its children. Instead, we'll get insertions from each child in
         // the portal directly.
       } else if (node.tag === SuspenseComponent) {
-        const current = node.alternate;
-        if (current !== null) {
-          const oldState: SuspenseState = current.memoizedState;
-          const newState: SuspenseState = node.memoizedState;
-          const oldIsHidden = oldState !== null && oldState.didTimeout;
-          const newIsHidden = newState !== null && newState.didTimeout;
-          if (oldIsHidden !== newIsHidden) {
-            // The placeholder either just timed out or switched back to the normal
-            // children after having previously timed out. Toggle the visibility of
-            // the direct host children.
-            const primaryChildParent = newIsHidden ? node.child : node;
+        if ((node.effectTag & Update) !== NoEffect) {
+          // Need to toggle the visibility of the primary children.
+          const newIsHidden = node.memoizedState !== null;
+          if (newIsHidden) {
+            const primaryChildParent = node.child;
             if (primaryChildParent !== null) {
-              appendAllChildren(parent, primaryChildParent, true, newIsHidden);
+              if (primaryChildParent.child !== null) {
+                primaryChildParent.child.return = primaryChildParent;
+                appendAllChildren(
+                  parent,
+                  primaryChildParent,
+                  true,
+                  newIsHidden,
+                );
+              }
+              const fallbackChildParent = primaryChildParent.sibling;
+              if (fallbackChildParent !== null) {
+                fallbackChildParent.return = node;
+                node = fallbackChildParent;
+                continue;
+              }
             }
-            // eslint-disable-next-line no-labels
-            break branches;
           }
         }
         if (node.child !== null) {
@@ -301,43 +304,19 @@ if (supportsMutation) {
       // eslint-disable-next-line no-labels
       branches: if (node.tag === HostComponent) {
         let instance = node.stateNode;
-        if (needsVisibilityToggle) {
+        if (needsVisibilityToggle && isHidden) {
+          // This child is inside a timed out tree. Hide it.
           const props = node.memoizedProps;
           const type = node.type;
-          if (isHidden) {
-            // This child is inside a timed out tree. Hide it.
-            instance = cloneHiddenInstance(instance, type, props, node);
-          } else {
-            // This child was previously inside a timed out tree. If it was not
-            // updated during this render, it may need to be unhidden. Clone
-            // again to be sure.
-            instance = cloneUnhiddenInstance(instance, type, props, node);
-          }
-          node.stateNode = instance;
+          instance = cloneHiddenInstance(instance, type, props, node);
         }
         appendChildToContainerChildSet(containerChildSet, instance);
       } else if (node.tag === HostText) {
         let instance = node.stateNode;
-        if (needsVisibilityToggle) {
+        if (needsVisibilityToggle && isHidden) {
+          // This child is inside a timed out tree. Hide it.
           const text = node.memoizedProps;
-          const rootContainerInstance = getRootHostContainer();
-          const currentHostContext = getHostContext();
-          if (isHidden) {
-            instance = createHiddenTextInstance(
-              text,
-              rootContainerInstance,
-              currentHostContext,
-              workInProgress,
-            );
-          } else {
-            instance = createTextInstance(
-              text,
-              rootContainerInstance,
-              currentHostContext,
-              workInProgress,
-            );
-          }
-          node.stateNode = instance;
+          instance = cloneHiddenTextInstance(instance, text, node);
         }
         appendChildToContainerChildSet(containerChildSet, instance);
       } else if (node.tag === HostPortal) {
@@ -345,27 +324,28 @@ if (supportsMutation) {
         // down its children. Instead, we'll get insertions from each child in
         // the portal directly.
       } else if (node.tag === SuspenseComponent) {
-        const current = node.alternate;
-        if (current !== null) {
-          const oldState: SuspenseState = current.memoizedState;
-          const newState: SuspenseState = node.memoizedState;
-          const oldIsHidden = oldState !== null && oldState.didTimeout;
-          const newIsHidden = newState !== null && newState.didTimeout;
-          if (oldIsHidden !== newIsHidden) {
-            // The placeholder either just timed out or switched back to the normal
-            // children after having previously timed out. Toggle the visibility of
-            // the direct host children.
-            const primaryChildParent = newIsHidden ? node.child : node;
+        if ((node.effectTag & Update) !== NoEffect) {
+          // Need to toggle the visibility of the primary children.
+          const newIsHidden = node.memoizedState !== null;
+          if (newIsHidden) {
+            const primaryChildParent = node.child;
             if (primaryChildParent !== null) {
-              appendAllChildrenToContainer(
-                containerChildSet,
-                primaryChildParent,
-                true,
-                newIsHidden,
-              );
+              if (primaryChildParent.child !== null) {
+                primaryChildParent.child.return = primaryChildParent;
+                appendAllChildrenToContainer(
+                  containerChildSet,
+                  primaryChildParent,
+                  true,
+                  newIsHidden,
+                );
+              }
+              const fallbackChildParent = primaryChildParent.sibling;
+              if (fallbackChildParent !== null) {
+                fallbackChildParent.return = node;
+                node = fallbackChildParent;
+                continue;
+              }
             }
-            // eslint-disable-next-line no-labels
-            break branches;
           }
         }
         if (node.child !== null) {
@@ -540,7 +520,7 @@ function completeWork(
       break;
     case LazyComponent:
       break;
-    case SimplePureComponent:
+    case SimpleMemoComponent:
     case FunctionComponent:
       break;
     case ClassComponent: {
@@ -688,14 +668,84 @@ function completeWork(
     case ForwardRef:
       break;
     case SuspenseComponent: {
-      const nextState = workInProgress.memoizedState;
-      const prevState = current !== null ? current.memoizedState : null;
-      const nextDidTimeout = nextState !== null && nextState.didTimeout;
-      const prevDidTimeout = prevState !== null && prevState.didTimeout;
-      if (nextDidTimeout !== prevDidTimeout) {
-        // If this render commits, and it switches between the normal state
-        // and the timed-out state, schedule an effect.
-        workInProgress.effectTag |= Update;
+      const nextState: null | SuspenseState = workInProgress.memoizedState;
+      if ((workInProgress.effectTag & DidCapture) !== NoEffect) {
+        // Something suspended. Re-render with the fallback children.
+        workInProgress.expirationTime = renderExpirationTime;
+        // Do not reset the effect list.
+        return workInProgress;
+      }
+
+      const nextDidTimeout = nextState !== null;
+      let prevDidTimeout = false;
+      if (current === null) {
+        // In cases where we didn't find a suitable hydration boundary we never
+        // downgraded this to a DehydratedSuspenseComponent, but we still need to
+        // pop the hydration state since we might be inside the insertion tree.
+        popHydrationState(workInProgress);
+      } else {
+        const prevState: null | SuspenseState = current.memoizedState;
+        prevDidTimeout = prevState !== null;
+        if (!nextDidTimeout && prevState !== null) {
+          // We just switched from the fallback to the normal children.
+
+          // Mark the event time of the switching from fallback to normal children,
+          // based on the start of when we first showed the fallback. This time
+          // was given a normal pri expiration time at the time it was shown.
+          const fallbackExpirationTime: ExpirationTime =
+            prevState.fallbackExpirationTime;
+          markRenderEventTime(fallbackExpirationTime);
+
+          // Delete the fallback.
+          // TODO: Would it be better to store the fallback fragment on
+          // the stateNode during the begin phase?
+          const currentFallbackChild: Fiber | null = (current.child: any)
+            .sibling;
+          if (currentFallbackChild !== null) {
+            // Deletions go at the beginning of the return fiber's effect list
+            const first = workInProgress.firstEffect;
+            if (first !== null) {
+              workInProgress.firstEffect = currentFallbackChild;
+              currentFallbackChild.nextEffect = first;
+            } else {
+              workInProgress.firstEffect = workInProgress.lastEffect = currentFallbackChild;
+              currentFallbackChild.nextEffect = null;
+            }
+            currentFallbackChild.effectTag = Deletion;
+          }
+        }
+      }
+
+      if (nextDidTimeout && !prevDidTimeout) {
+        // If this subtreee is running in concurrent mode we can suspend,
+        // otherwise we won't suspend.
+        // TODO: This will still suspend a synchronous tree if anything
+        // in the concurrent tree already suspended during this render.
+        // This is a known bug.
+        if ((workInProgress.mode & ConcurrentMode) !== NoContext) {
+          renderDidSuspend();
+        }
+      }
+
+      if (supportsPersistence) {
+        // TODO: Only schedule updates if not prevDidTimeout.
+        if (nextDidTimeout) {
+          // If this boundary just timed out, schedule an effect to attach a
+          // retry listener to the proimse. This flag is also used to hide the
+          // primary children.
+          workInProgress.effectTag |= Update;
+        }
+      }
+      if (supportsMutation) {
+        // TODO: Only schedule updates if these values are non equal, i.e. it changed.
+        if (nextDidTimeout || prevDidTimeout) {
+          // If this boundary just timed out, schedule an effect to attach a
+          // retry listener to the proimse. This flag is also used to hide the
+          // primary children. In mutation mode, we also need the flag to
+          // *unhide* children that were previously hidden, so check if the
+          // is currently timed out, too.
+          workInProgress.effectTag |= Update;
+        }
       }
       break;
     }
@@ -715,8 +765,91 @@ function completeWork(
       break;
     case ContextConsumer:
       break;
-    case PureComponent:
+    case MemoComponent:
       break;
+    case IncompleteClassComponent: {
+      // Same as class component case. I put it down here so that the tags are
+      // sequential to ensure this switch is compiled to a jump table.
+      const Component = workInProgress.type;
+      if (isLegacyContextProvider(Component)) {
+        popLegacyContext(workInProgress);
+      }
+      break;
+    }
+    case DehydratedSuspenseComponent: {
+      if (enableSuspenseServerRenderer) {
+        if (current === null) {
+          let wasHydrated = popHydrationState(workInProgress);
+          invariant(
+            wasHydrated,
+            'A dehydrated suspense component was completed without a hydrated node. ' +
+              'This is probably a bug in React.',
+          );
+          skipPastDehydratedSuspenseInstance(workInProgress);
+        } else if ((workInProgress.effectTag & DidCapture) === NoEffect) {
+          // This boundary did not suspend so it's now hydrated.
+          // To handle any future suspense cases, we're going to now upgrade it
+          // to a Suspense component. We detach it from the existing current fiber.
+          current.alternate = null;
+          workInProgress.alternate = null;
+          workInProgress.tag = SuspenseComponent;
+          workInProgress.memoizedState = null;
+          workInProgress.stateNode = null;
+        }
+      }
+      break;
+    }
+    case EventComponent: {
+      if (enableEventAPI) {
+        popHostContext(workInProgress);
+        const rootContainerInstance = getRootHostContainer();
+        const responder = workInProgress.type.responder;
+        let eventComponentInstance: ReactEventComponentInstance | null =
+          workInProgress.stateNode;
+
+        if (eventComponentInstance === null) {
+          let responderState = null;
+          if (responder.createInitialState !== undefined) {
+            responderState = responder.createInitialState(newProps);
+          }
+          eventComponentInstance = workInProgress.stateNode = {
+            context: null,
+            props: newProps,
+            responder,
+            rootInstance: rootContainerInstance,
+            state: responderState,
+          };
+          mountEventComponent(eventComponentInstance);
+        } else {
+          // Update the props on the event component state node
+          eventComponentInstance.props = newProps;
+          // Update the root container, so we can properly unmount events at some point
+          eventComponentInstance.rootInstance = rootContainerInstance;
+          updateEventComponent(eventComponentInstance);
+        }
+      }
+      break;
+    }
+    case EventTarget: {
+      if (enableEventAPI) {
+        popHostContext(workInProgress);
+        const type = workInProgress.type.type;
+        const rootContainerInstance = getRootHostContainer();
+        const shouldUpdate = handleEventTarget(
+          type,
+          newProps,
+          rootContainerInstance,
+          workInProgress,
+        );
+        // Update the latest props on the stateNode. This is used
+        // during the event phase to find the most current props.
+        workInProgress.stateNode.props = newProps;
+        if (shouldUpdate) {
+          markUpdate(workInProgress);
+        }
+      }
+      break;
+    }
     default:
       invariant(
         false,

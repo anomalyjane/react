@@ -26,7 +26,9 @@ export type WorkTag =
   | 15
   | 16
   | 17
-  | 18;
+  | 18
+  | 19
+  | 20;
 
 export const FunctionComponent = 0;
 export const ClassComponent = 1;
@@ -42,6 +44,10 @@ export const ContextProvider = 10;
 export const ForwardRef = 11;
 export const Profiler = 12;
 export const SuspenseComponent = 13;
-export const PureComponent = 14;
-export const SimplePureComponent = 15;
+export const MemoComponent = 14;
+export const SimpleMemoComponent = 15;
 export const LazyComponent = 16;
+export const IncompleteClassComponent = 17;
+export const DehydratedSuspenseComponent = 18;
+export const EventComponent = 19;
+export const EventTarget = 20;

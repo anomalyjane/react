@@ -118,7 +118,14 @@ describe('ReactCompositeComponent', () => {
     }
 
     const el = document.createElement('div');
-    ReactDOM.render(<Child test="test" />, el);
+    expect(() => ReactDOM.render(<Child test="test" />, el)).toWarnDev(
+      'Warning: The <Child /> component appears to be a function component that returns a class instance. ' +
+        'Change Child to a class that extends React.Component instead. ' +
+        "If you can't use a class try assigning the prototype on the function as a workaround. " +
+        '`Child.prototype = React.Component.prototype`. ' +
+        "Don't use an arrow function since it cannot be called with `new` by React.",
+      {withoutStack: true},
+    );
 
     expect(el.textContent).toBe('test');
   });
@@ -332,7 +339,7 @@ describe('ReactCompositeComponent', () => {
     ReactDOM.unmountComponentAtNode(container);
 
     expect(() => instance.forceUpdate()).toWarnDev(
-      "Warning: Can't call setState (or forceUpdate) on an unmounted " +
+      "Warning: Can't perform a React state update on an unmounted " +
         'component. This is a no-op, but it indicates a memory leak in your ' +
         'application. To fix, cancel all subscriptions and asynchronous ' +
         'tasks in the componentWillUnmount method.\n' +
@@ -379,7 +386,7 @@ describe('ReactCompositeComponent', () => {
     expect(() => {
       instance.setState({value: 2});
     }).toWarnDev(
-      "Warning: Can't call setState (or forceUpdate) on an unmounted " +
+      "Warning: Can't perform a React state update on an unmounted " +
         'component. This is a no-op, but it indicates a memory leak in your ' +
         'application. To fix, cancel all subscriptions and asynchronous ' +
         'tasks in the componentWillUnmount method.\n' +
@@ -1740,6 +1747,25 @@ describe('ReactCompositeComponent', () => {
           'did you accidentally return an object from the constructor?',
       ],
       {withoutStack: true},
+    );
+  });
+
+  it('should warn about reassigning this.props while rendering', () => {
+    class Bad extends React.Component {
+      componentDidMount() {}
+      componentDidUpdate() {}
+      render() {
+        this.props = {...this.props};
+        return null;
+      }
+    }
+
+    const container = document.createElement('div');
+    expect(() => {
+      ReactDOM.render(<Bad />, container);
+    }).toWarnDev(
+      'It looks like Bad is reassigning its own `this.props` while rendering. ' +
+        'This is not supported and can lead to confusing bugs.',
     );
   });
 

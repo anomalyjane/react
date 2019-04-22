@@ -43,16 +43,59 @@ describe('ReactDOMServerSuspense', () => {
     resetModules();
   });
 
-  it('should always render the fallback when a placeholder is encountered', async () => {
-    const Suspended = props => {
-      throw new Promise(() => {});
-    };
-    const e = await serverRender(
-      <React.unstable_Suspense fallback={<div />}>
-        <Suspended />
-      </React.unstable_Suspense>,
+  function Text(props) {
+    return <div>{props.text}</div>;
+  }
+
+  function AsyncText(props) {
+    throw new Promise(() => {});
+  }
+
+  it('should render the children when no promise is thrown', async () => {
+    const c = await serverRender(
+      <div>
+        <React.Suspense fallback={<Text text="Fallback" />}>
+          <Text text="Children" />
+        </React.Suspense>
+      </div>,
     );
+    const e = c.children[0];
 
     expect(e.tagName).toBe('DIV');
+    expect(e.textContent).toBe('Children');
+  });
+
+  it('should render the fallback when a promise thrown', async () => {
+    const c = await serverRender(
+      <div>
+        <React.Suspense fallback={<Text text="Fallback" />}>
+          <AsyncText text="Children" />
+        </React.Suspense>
+      </div>,
+    );
+    const e = c.children[0];
+
+    expect(e.tagName).toBe('DIV');
+    expect(e.textContent).toBe('Fallback');
+  });
+
+  it('should work with nested suspense components', async () => {
+    const c = await serverRender(
+      <div>
+        <React.Suspense fallback={<Text text="Fallback" />}>
+          <div>
+            <Text text="Children" />
+            <React.Suspense fallback={<Text text="Fallback" />}>
+              <AsyncText text="Children" />
+            </React.Suspense>
+          </div>
+        </React.Suspense>
+      </div>,
+    );
+    const e = c.children[0];
+
+    expect(e.innerHTML).toBe(
+      '<div>Children</div><!--$!--><div>Fallback</div><!--/$-->',
+    );
   });
 });

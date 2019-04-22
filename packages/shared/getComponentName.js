@@ -16,14 +16,22 @@ import {
   REACT_FORWARD_REF_TYPE,
   REACT_FRAGMENT_TYPE,
   REACT_PORTAL_TYPE,
-  REACT_PURE_TYPE,
+  REACT_MEMO_TYPE,
   REACT_PROFILER_TYPE,
   REACT_PROVIDER_TYPE,
   REACT_STRICT_MODE_TYPE,
   REACT_SUSPENSE_TYPE,
   REACT_LAZY_TYPE,
+  REACT_EVENT_COMPONENT_TYPE,
+  REACT_EVENT_TARGET_TYPE,
+  REACT_EVENT_TARGET_TOUCH_HIT,
+  REACT_EVENT_FOCUS_TARGET,
+  REACT_EVENT_PRESS_TARGET,
 } from 'shared/ReactSymbols';
 import {refineResolvedLazyComponent} from 'shared/ReactLazyComponent';
+import type {ReactEventComponent, ReactEventTarget} from 'shared/ReactTypes';
+
+import {enableEventAPI} from './ReactFeatureFlags';
 
 function getWrappedName(
   outerType: mixed,
@@ -79,13 +87,40 @@ function getComponentName(type: mixed): string | null {
         return 'Context.Provider';
       case REACT_FORWARD_REF_TYPE:
         return getWrappedName(type, type.render, 'ForwardRef');
-      case REACT_PURE_TYPE:
+      case REACT_MEMO_TYPE:
         return getComponentName(type.type);
       case REACT_LAZY_TYPE: {
         const thenable: LazyComponent<mixed> = (type: any);
         const resolvedThenable = refineResolvedLazyComponent(thenable);
         if (resolvedThenable) {
           return getComponentName(resolvedThenable);
+        }
+        break;
+      }
+      case REACT_EVENT_COMPONENT_TYPE: {
+        if (enableEventAPI) {
+          const eventComponent = ((type: any): ReactEventComponent);
+          const displayName = eventComponent.displayName;
+          if (displayName !== undefined) {
+            return displayName;
+          }
+        }
+        break;
+      }
+      case REACT_EVENT_TARGET_TYPE: {
+        if (enableEventAPI) {
+          const eventTarget = ((type: any): ReactEventTarget);
+          if (eventTarget.type === REACT_EVENT_TARGET_TOUCH_HIT) {
+            return 'TouchHitTarget';
+          } else if (eventTarget.type === REACT_EVENT_FOCUS_TARGET) {
+            return 'FocusTarget';
+          } else if (eventTarget.type === REACT_EVENT_PRESS_TARGET) {
+            return 'PressTarget';
+          }
+          const displayName = eventTarget.displayName;
+          if (displayName !== undefined) {
+            return displayName;
+          }
         }
       }
     }

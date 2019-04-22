@@ -7,7 +7,6 @@ jobs:
 
     environment:
       TZ: /usr/share/zoneinfo/America/Los_Angeles
-      TRAVIS_REPO_SLUG: facebook/react
 
     parallelism: 4
 
@@ -40,3 +39,15 @@ jobs:
           key: v1-node-{{ arch }}-{{ .Branch }}-{{ checksum "yarn.lock" }}
           paths:
             - node_modules
+
+      - store_artifacts:
+          path: ./node_modules.tgz
+
+      - store_artifacts:
+          path: ./build.tgz
+
+      - store_artifacts:
+          path: ./build/bundle-sizes.json
+
+      - store_artifacts:
+          path: ./scripts/error-codes/codes.json

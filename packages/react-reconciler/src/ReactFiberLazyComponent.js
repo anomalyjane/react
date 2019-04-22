@@ -12,6 +12,21 @@ import type {LazyComponent, Thenable} from 'shared/ReactLazyComponent';
 import {Resolved, Rejected, Pending} from 'shared/ReactLazyComponent';
 import warning from 'shared/warning';
 
+export function resolveDefaultProps(Component: any, baseProps: Object): Object {
+  if (Component && Component.defaultProps) {
+    // Resolve default props. Taken from ReactElement
+    const props = Object.assign({}, baseProps);
+    const defaultProps = Component.defaultProps;
+    for (let propName in defaultProps) {
+      if (props[propName] === undefined) {
+        props[propName] = defaultProps[propName];
+      }
+    }
+    return props;
+  }
+  return baseProps;
+}
+
 export function readLazyComponentType<T>(lazyComponent: LazyComponent<T>): T {
   const status = lazyComponent._status;
   const result = lazyComponent._result;
@@ -58,6 +73,13 @@ export function readLazyComponentType<T>(lazyComponent: LazyComponent<T>): T {
           }
         },
       );
+      // Handle synchronous thenables.
+      switch (lazyComponent._status) {
+        case Resolved:
+          return lazyComponent._result;
+        case Rejected:
+          throw lazyComponent._result;
+      }
       lazyComponent._result = thenable;
       throw thenable;
     }

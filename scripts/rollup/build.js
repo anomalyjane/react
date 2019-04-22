@@ -53,12 +53,30 @@ const {
   RN_FB_PROFILING,
 } = Bundles.bundleTypes;
 
-const requestedBundleTypes = (argv.type || '')
-  .split(',')
-  .map(type => type.toUpperCase());
-const requestedBundleNames = (argv._[0] || '')
-  .split(',')
-  .map(type => type.toLowerCase());
+function parseRequestedNames(names, toCase) {
+  let result = [];
+  for (let i = 0; i < names.length; i++) {
+    let splitNames = names[i].split(',');
+    for (let j = 0; j < splitNames.length; j++) {
+      let name = splitNames[j].trim();
+      if (!name) {
+        continue;
+      }
+      if (toCase === 'uppercase') {
+        name = name.toUpperCase();
+      } else if (toCase === 'lowercase') {
+        name = name.toLowerCase();
+      }
+      result.push(name);
+    }
+  }
+  return result;
+}
+
+const requestedBundleTypes = argv.type
+  ? parseRequestedNames([argv.type], 'uppercase')
+  : [];
+const requestedBundleNames = parseRequestedNames(argv._, 'lowercase');
 const forcePrettyOutput = argv.pretty;
 const syncFBSourcePath = argv['sync-fbsource'];
 const syncWWWPath = argv['sync-www'];
@@ -95,7 +113,7 @@ function getBabelConfig(updateBabelOptions, bundleType, filename) {
       return Object.assign({}, options, {
         plugins: options.plugins.concat([
           // Minify invariant messages
-          require('../error-codes/replace-invariant-error-codes'),
+          require('../error-codes/transform-error-messages'),
           // Wrap warning() calls in a __DEV__ check so they are stripped from production.
           require('../babel/wrap-warning-with-env-check'),
         ]),
@@ -108,6 +126,11 @@ function getBabelConfig(updateBabelOptions, bundleType, filename) {
     case RN_FB_PROFILING:
       return Object.assign({}, options, {
         plugins: options.plugins.concat([
+          [
+            require('../error-codes/transform-error-messages'),
+            // Preserve full error messages in React Native build
+            {noMinify: true},
+          ],
           // Wrap warning() calls in a __DEV__ check so they are stripped from production.
           require('../babel/wrap-warning-with-env-check'),
         ]),
@@ -123,7 +146,7 @@ function getBabelConfig(updateBabelOptions, bundleType, filename) {
           // Use object-assign polyfill in open source
           path.resolve('./scripts/babel/transform-object-assign-require'),
           // Minify invariant messages
-          require('../error-codes/replace-invariant-error-codes'),
+          require('../error-codes/transform-error-messages'),
           // Wrap warning() calls in a __DEV__ check so they are stripped from production.
           require('../babel/wrap-warning-with-env-check'),
         ]),
@@ -280,7 +303,6 @@ function getPlugins(
   bundleType,
   globalName,
   moduleType,
-  modulesToStub,
   pureExternalModules
 ) {
   const findAndRecordErrorCodes = extractErrorCodes(errorCodeOpts);
@@ -407,7 +429,12 @@ function shouldSkipBundle(bundle, bundleType) {
   }
   if (requestedBundleNames.length > 0) {
     const isAskingForDifferentNames = requestedBundleNames.every(
-      requestedName => bundle.label.indexOf(requestedName) === -1
+      // If the name ends with `something/index` we only match if the
+      // entry ends in something. Such as `react-dom/index` only matches
+      // `react-dom` but not `react-dom/server`. Everything else is fuzzy
+      // search.
+      requestedName =>
+        (bundle.entry + '/index.js').indexOf(requestedName) === -1
     );
     if (isAskingForDifferentNames) {
       return true;
@@ -478,7 +505,6 @@ async function createBundle(bundle, bundleType) {
       bundleType,
       bundle.global,
       bundle.moduleType,
-      bundle.modulesToStub,
       pureExternalModules
     ),
     // We can't use getters in www.
